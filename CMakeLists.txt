@@ -40,7 +40,7 @@ set(rpm_arch "noarch")
 
 # major/minor: if set via ENV then compare
 set(VERSION_MAJOR 5)
-set(VERSION_MINOR 4)
+set(VERSION_MINOR 5)
 if(DEFINED ENV{AUTOPILOT_VERSION_MAJOR})
   if(NOT $ENV{AUTOPILOT_VERSION_MAJOR} EQUAL ${VERSION_MAJOR})
      message("Version conflict: VERSION_MAJOR from file: ${VERSION_MAJOR}. Env: AUTOPILOT_VERSION_MAJOR=$ENV{AUTOPILOT_VERSION_MAJOR}")
