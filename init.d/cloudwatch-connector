@@ -1,0 +1,160 @@
+#!/bin/bash
+#
+# arago GmbH Autopilot
+# CloudWatch IssueDataInput
+#
+# chkconfig: 35 83 17
+# description: autopilot Issue Connector for CloudWatch
+
+### BEGIN INIT INFO
+# Provides: autopilot-cloudwatch-connector
+# Required-Start: $network
+# Required-Stop:
+# Should-Start:
+# Should-Stop:
+# Default-Start: 3 5
+# Default-Stop: 0 1 2 6
+# Short-Description: start and stop autopilot-cloudwatch-connector
+# Description: autopilot Issue Connector for CloudWatch
+### END INIT INFO
+
+PROGNAME="autopilot-cloudwatch-connector"
+PROGPATH="/opt/autopilot/cloudwatch/"
+LOGFILE=/var/log/autopilot/cloudwatch/cloudwatch-connector.log
+RUN_USER=arago
+RUN_GROUP=$RUN_USER
+
+
+# if /usr/java/latest is there we set JAVA_HOME accordingly unless already set
+if [ -e /usr/java/latest ]; then
+    if [ -z "$JAVA_HOME" ]; then
+        export JAVA_HOME=/usr/java/latest
+    fi
+fi
+if [ -n "$JAVA_HOME" ]; then
+    export JAVA_HOME
+    JAVABIN="$JAVA_HOME/bin/java"
+else
+    JAVABIN=java
+fi
+
+_status() {
+    PIDLIST=$(/bin/ps -eo "pid args" | /usr/bin/perl -lane 'print $F[0] if /\bde.arago.autopilot.cloudwatch.CreateEventIssue\b/')
+
+    if [ -z "$PIDLIST" ]; then
+	return 1
+    else
+	return 0
+    fi
+}
+
+status() {
+    _status
+    RC=$?
+    if [ $RC -eq 0 ]; then
+	echo "Already running"
+    else
+	echo "Not running"
+    fi
+    return $RC
+}
+
+start() {
+    _status
+    RC=$?
+    if [ $RC -eq 0 ]; then
+	echo "Already running"
+	return 4
+    fi
+
+    TRUST_STORE_PATH=/opt/autopilot/conf/cloudwatch-issue-connector.jks
+    TRUST_STORE_SECRET=nix$$xxx
+    JAVA_OPTS=""
+
+#    if [ -x "/opt/autopilot/setup/helpers/initialize_keystore" ]; then
+#        /opt/autopilot/setup/helpers/initialize_keystore $TRUST_STORE_PATH $TRUST_STORE_SECRET
+#        JAVA_OPTS="-Djavax.net.ssl.trustStore=$TRUST_STORE_PATH -Djavax.net.ssl.trustStorePassword=$TRUST_STORE_SECRET"
+#    fi
+
+    CMD="$JAVABIN $JAVA_OPTS -cp $PROGPATH/$PROGNAME.jar -Djava.util.logging.config.file=/opt/autopilot/conf/autopilot-cloudwatch-connector-logging.properties de.arago.autopilot.cloudwatch.CreateEventIssue -t 600"
+    if [ "$RUN_USER" != "root" ]; then
+       if [ ! -e $LOGFILE ]; then
+           touch $LOGFILE
+        fi
+        chown $RUN_USER:$RUN_GROUP $LOGFILE
+	/bin/su - $RUN_USER -s /bin/bash -c "$CMD > $LOGFILE 2>&1 &" > /dev/null 2>&1 &
+    else
+	$CMD > $LOGFILE 2>&1 &
+    fi
+
+    /bin/sleep 1
+    _status
+    RC=$?
+    if [ $RC -eq 0 ]; then
+	echo "Running"
+    else
+	echo "Start failed"
+	exit 1
+    fi
+    return $RC
+}
+
+stop() {
+    _status
+    RC=$?
+    if [ $RC -ne 0 ]; then
+	echo "Already stopped"
+	return $RC
+    fi
+
+    if [ "x$PIDLIST" != "x" ]; then
+        /bin/kill -9 $PIDLIST
+    fi
+
+    /bin/sleep 1
+
+     _status
+    RC=$?
+    if [ $RC -eq 0 ]; then
+	echo "Stop failed"
+	return 1
+    else
+	echo "Stopped"
+	return 0
+    fi
+}
+
+restart() {
+    _status
+    RC=$?
+    if [ $RC -eq 0 ]; then
+	stop
+	sleep 1
+    fi
+    start
+}
+
+# See how we were called.
+case "$1" in
+    start)
+	start
+	RETVAL=$? 
+	;;
+    stop)
+	stop
+	RETVAL=$?
+	;;
+    status)
+	status
+	RETVAL=$?
+	;;
+    restart)
+	restart
+	RETVAL=$?
+	;;
+    *)
+	echo $"Usage: $0 {start|stop|status|restart}"
+	RETVAL=2
+esac
+
+exit $RETVAL

@@ -1,0 +1,20 @@
+handler-endpoint: "tcp://127.0.0.1:7288"
+
+graphit:
+  endpoint: "http://localhost:8888"
+
+aae:
+  endpoint: "tcp://localhost:7284"
+  publisher: "tcp://localhost:7285"
+
+auth:
+  clientId: xxxxxxxxxxxxxxxxxxxxxxxxxxxx
+  clientSecret: xxxxxxxxxxxxxxxxxxxxxxxxxxxx
+  url: https://wso2-host:9443/oauth2/token
+  scope:
+
+#how often process should check for fullfilled data requests in seconds
+refresh-interval: 180
+
+#how many times it should try to sync to graphit before give up
+max-retries: 100
