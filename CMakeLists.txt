@@ -113,8 +113,7 @@ set(builddir "${basedir}/${tmp_subdir}")
 file(MAKE_DIRECTORY "${builddir}")
 message("using builddir ${builddir}")
 
-file(RENAME ${basedir}/target/acc-jar-with-dependencies.jar ${basedir}/target/autopilot-cloudwatch-connector.jar)
-file(COPY ${basedir}/target/autopilot-cloudwatch-connector.jar DESTINATION ${builddir})
+file(COPY ${basedir}/target/cloudwatch-connector-dist.jar DESTINATION ${builddir})
 
 # the following strange looking lines will ensure that
 # unwanted directories won't become part of package

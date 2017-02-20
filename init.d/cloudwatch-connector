@@ -18,7 +18,7 @@
 # Description: autopilot Issue Connector for CloudWatch
 ### END INIT INFO
 
-PROGNAME="autopilot-cloudwatch-connector"
+PROGNAME="cloudwatch-connector-dist"
 PROGPATH="/opt/autopilot/cloudwatch/"
 LOGFILE=/var/log/autopilot/cloudwatch/cloudwatch-connector.log
 RUN_USER=arago
@@ -76,7 +76,7 @@ start() {
 #        JAVA_OPTS="-Djavax.net.ssl.trustStore=$TRUST_STORE_PATH -Djavax.net.ssl.trustStorePassword=$TRUST_STORE_SECRET"
 #    fi
 
-    CMD="$JAVABIN $JAVA_OPTS -cp $PROGPATH/$PROGNAME.jar -Djava.util.logging.config.file=/opt/autopilot/conf/autopilot-cloudwatch-connector-logging.properties de.arago.autopilot.cloudwatch.CreateEventIssue -t 600"
+    CMD="$JAVABIN $JAVA_OPTS -cp $PROGPATH/$PROGNAME.jar -Djava.util.logging.config.file=/opt/autopilot/conf/cloudwatch-connector-logging.properties de.arago.autopilot.cloudwatch.CreateEventIssue -t 600"
     if [ "$RUN_USER" != "root" ]; then
        if [ ! -e $LOGFILE ]; then
            touch $LOGFILE
