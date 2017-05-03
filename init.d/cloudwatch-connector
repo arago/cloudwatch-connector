@@ -39,7 +39,7 @@ else
 fi
 
 _status() {
-    PIDLIST=$(/bin/ps -eo "pid args" | /usr/bin/perl -lane 'print $F[0] if /\bde.arago.autopilot.cloudwatch.CreateEventIssue\b/')
+    PIDLIST=$(/bin/ps -eo "pid args" | /usr/bin/perl -lane 'print $F[0] if /\bde.arago.autopilot.cloudwatch.CloudWatchMain\b/')
 
     if [ -z "$PIDLIST" ]; then
 	return 1
@@ -67,7 +67,7 @@ start() {
 	return 4
     fi
 
-    TRUST_STORE_PATH=/opt/autopilot/conf/cloudwatch-issue-connector.jks
+    TRUST_STORE_PATH=/opt/autopilot/conf/cloudwatch-connector.jks
     TRUST_STORE_SECRET=nix$$xxx
     JAVA_OPTS=""
 
@@ -76,7 +76,7 @@ start() {
 #        JAVA_OPTS="-Djavax.net.ssl.trustStore=$TRUST_STORE_PATH -Djavax.net.ssl.trustStorePassword=$TRUST_STORE_SECRET"
 #    fi
 
-    CMD="$JAVABIN $JAVA_OPTS -cp $PROGPATH/$PROGNAME.jar -Djava.util.logging.config.file=/opt/autopilot/conf/cloudwatch-connector-logging.properties de.arago.autopilot.cloudwatch.CreateEventIssue -t 600"
+    CMD="$JAVABIN $JAVA_OPTS -cp $PROGPATH/$PROGNAME.jar -Djava.util.logging.config.file=/opt/autopilot/conf/cloudwatch-connector-logging.properties -Dlog4j.configuration=/opt/autopilot/conf/cloudwatch-connector-log4j.properties de.arago.connector.cloudwatch.CloudWatchMain"
     if [ "$RUN_USER" != "root" ]; then
        if [ ! -e $LOGFILE ]; then
            touch $LOGFILE

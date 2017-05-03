@@ -31,8 +31,8 @@
 cmake_minimum_required(VERSION 2.8.10)
 
 set(tmp_subdir "_tmp")
-set(rpm_name "autopilot-cloudwatch-connector")
-set(rpm_desc "arago GmbH Issue Connector for CloudWatch")
+set(rpm_name "cloudwatch-connector")
+set(rpm_desc "arago GmbH Connector for CloudWatch")
 set(rpm_target_dir "/opt/autopilot/cloudwatch/")
 
 # set RPM arch:
