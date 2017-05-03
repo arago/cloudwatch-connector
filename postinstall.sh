@@ -10,4 +10,7 @@ else
     /sbin/chkconfig --level 35 $SERVICE_NAME on
 fi
 
+mkdir -p /var/log/autopilot/cloudwatch
+chown -R arago:arago /var/log/autopilot/cloudwatch
+
 exit 0;
