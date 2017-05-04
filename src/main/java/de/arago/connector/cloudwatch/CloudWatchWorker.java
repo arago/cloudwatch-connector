@@ -3,10 +3,12 @@ package de.arago.connector.cloudwatch;
 import co.arago.hiro.client.api.HiroClient;
 import co.arago.hiro.client.builder.ClientBuilder;
 import co.arago.hiro.client.builder.TokenBuilder;
+import com.amazonaws.ClientConfiguration;
 import com.amazonaws.auth.BasicAWSCredentials;
 import com.amazonaws.services.sqs.AmazonSQSAsync;
 import com.amazonaws.services.sqs.AmazonSQSAsyncClient;
 import com.amazonaws.services.sqs.buffered.AmazonSQSBufferedAsyncClient;
+import com.amazonaws.services.sqs.model.ListQueuesResult;
 import com.amazonaws.services.sqs.model.Message;
 import com.amazonaws.services.sqs.model.ReceiveMessageRequest;
 import com.amazonaws.services.sqs.model.ReceiveMessageResult;
@@ -14,6 +16,7 @@ import de.arago.commons.configuration.Config;
 import de.arago.commons.configuration.ConfigFactory;
 import java.io.Closeable;
 import java.io.IOException;
+import java.util.Map;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -36,6 +39,7 @@ public class CloudWatchWorker implements Closeable, Runnable {
   private Thread worker;
   private int sqsWaitTimeout;
   private int sqsMessages;
+  private int sqsMaxConnections;
   private boolean skipCertsCheck;
 
   public CloudWatchWorker() {
@@ -44,39 +48,41 @@ public class CloudWatchWorker implements Closeable, Runnable {
   public void configure() {
     final Config c = ConfigFactory.open("cloudwatch-connector");
 
-    awsKey = c.get("aws.AWS_ACCESS_KEY");
-    awsSecret = c.get("aws.AWS_SECRET_KEY");
-    queueUrl = c.get("aws.sqs-url");
+    awsKey = c.getOr("aws.AWS_ACCESS_KEY", "");
+    awsSecret = c.getOr("aws.AWS_SECRET_KEY", "");
+    queueUrl = c.getOr("aws.sqs-url", "");
 
-    if (awsKey.isEmpty() || awsSecret.isEmpty() || queueUrl.isEmpty()) {
-      LOG.log(Level.SEVERE, "config does not contain aws access options");
-      throw new IllegalArgumentException();
+    if (queueUrl.isEmpty()) {
+      throw new IllegalArgumentException("config does not contain aws queueUrl");
     }
 
-    graphitUrl = c.get("graphit.url");
+    graphitUrl = c.getOr("graphit.url", "");
 
     if (graphitUrl.isEmpty()) {
-      LOG.log(Level.SEVERE, "config does not contain graphit options");
-      throw new IllegalArgumentException();
+      throw new IllegalArgumentException("config does not contain graphit options");
     }
 
-    authUrl = c.get("auth.url");
-    authUser = c.get("auth.username");
-    authPasswd = c.get("auth.passwd");
-    authClientId = c.get("auth.clientId");
-    authClientSecret = c.get("auth.clientSecret");
+    authUrl = c.getOr("auth.url", "");
+    authUser = c.getOr("auth.username", "");
+    authPasswd = c.getOr("auth.passwd", "");
+    authClientId = c.getOr("auth.clientId", "");
+    authClientSecret = c.getOr("auth.clientSecret", "");
 
     sqsWaitTimeout = Integer.parseInt(c.getOr("aws.sqs-timeout", "30"));
     sqsMessages = Integer.parseInt(c.getOr("aws.sqs-messages", "100"));
+    sqsMaxConnections = Integer.parseInt(c.getOr("aws.sqs-connections", "50"));
 
     skipCertsCheck = Boolean.parseBoolean(c.getOr("skip-certs-validation", "false"));
   }
 
   public void start() {
     // Create the basic Amazon SQS async client
+    final ClientConfiguration clientConfiguration = new ClientConfiguration();
+    clientConfiguration.withMaxConnections(sqsMaxConnections);
+
     final AmazonSQSAsync sqsAsync;
     if (awsKey.isEmpty() || awsSecret.isEmpty()) {
-      sqsAsync = new AmazonSQSAsyncClient();
+      sqsAsync = new AmazonSQSAsyncClient(clientConfiguration);
     } else {
       sqsAsync = new AmazonSQSAsyncClient(new BasicAWSCredentials(awsKey, awsSecret));
     }
@@ -93,10 +99,22 @@ public class CloudWatchWorker implements Closeable, Runnable {
 
     hiro = builder.makeHiroClient();
 
-    hiro.info();
+    try {
+      Map info = hiro.info();
+      LOG.log(Level.FINE, "graphit: {0}", info);
+    } catch (Throwable t) {
+      throw new IllegalStateException("could not connect to graphit", t);
+    }
 
     // Create the buffered client
     bufferedSQS = new AmazonSQSBufferedAsyncClient(sqsAsync);
+
+    try {
+      ListQueuesResult listQueues = bufferedSQS.listQueues();
+      LOG.log(Level.FINE, "aws: {0}", listQueues);
+    } catch (Throwable t) {
+      throw new IllegalStateException("could not connect to aws", t);
+    }
 
     worker = new Thread(this);
     worker.start();
@@ -106,7 +124,6 @@ public class CloudWatchWorker implements Closeable, Runnable {
   public void close() throws IOException {
     try {
       worker.interrupt();
-      worker.wait(60000);
     } catch (Throwable t) {
       LOG.log(Level.SEVERE, null, t);
     }
@@ -122,6 +139,10 @@ public class CloudWatchWorker implements Closeable, Runnable {
       ReceiveMessageResult rx = bufferedSQS.receiveMessage(receiveRq);
 
       for (Message m : rx.getMessages()) {
+        if (Thread.currentThread().isInterrupted()) {
+          break;
+        }
+
         LOG.log(Level.FINEST, "received message : {0} : {1} : {2}", new Object[]{m.getMessageId(), m.getAttributes(), m.getBody()});
 
         try {

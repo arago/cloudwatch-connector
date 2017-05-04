@@ -26,12 +26,12 @@ public class CloudWatchMain {
       @Override
       public void run() {
         LOG.info("[WORKER] stopping ...");
-
         try {
           worker.close();
         } catch (IOException ex) {
           LOG.log(Level.SEVERE, null, ex);
         }
+        LOG.info("[WORKER] stopped");
       }
     }));
 

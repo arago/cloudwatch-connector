@@ -39,7 +39,7 @@ else
 fi
 
 _status() {
-    PIDLIST=$(/bin/ps -eo "pid args" | /usr/bin/perl -lane 'print $F[0] if /\bde.arago.autopilot.cloudwatch.CloudWatchMain\b/')
+    PIDLIST=$(/bin/ps -eo "pid args" | /usr/bin/perl -lane 'print $F[0] if /\bde.arago.connector.cloudwatch.CloudWatchMain\b/')
 
     if [ -z "$PIDLIST" ]; then
 	return 1
@@ -71,12 +71,12 @@ start() {
     TRUST_STORE_SECRET=nix$$xxx
     JAVA_OPTS=""
 
-#    if [ -x "/opt/autopilot/setup/helpers/initialize_keystore" ]; then
-#        /opt/autopilot/setup/helpers/initialize_keystore $TRUST_STORE_PATH $TRUST_STORE_SECRET
-#        JAVA_OPTS="-Djavax.net.ssl.trustStore=$TRUST_STORE_PATH -Djavax.net.ssl.trustStorePassword=$TRUST_STORE_SECRET"
-#    fi
+    if [ -x "/opt/autopilot/setup/helpers/initialize_keystore" ]; then
+        /opt/autopilot/setup/helpers/initialize_keystore $TRUST_STORE_PATH $TRUST_STORE_SECRET
+        JAVA_OPTS="-Djavax.net.ssl.trustStore=$TRUST_STORE_PATH -Djavax.net.ssl.trustStorePassword=$TRUST_STORE_SECRET"
+    fi
 
-    CMD="$JAVABIN $JAVA_OPTS -cp $PROGPATH/$PROGNAME.jar -Djava.util.logging.config.file=/opt/autopilot/conf/cloudwatch-connector-logging.properties -Dlog4j.configuration=/opt/autopilot/conf/cloudwatch-connector-log4j.properties de.arago.connector.cloudwatch.CloudWatchMain"
+    CMD="$JAVABIN $JAVA_OPTS -Xms1G -Xmx1G -cp $PROGPATH/$PROGNAME.jar -Djava.util.logging.config.file=/opt/autopilot/conf/cloudwatch-connector-logging.properties -Dlog4j.configuration=/opt/autopilot/conf/cloudwatch-connector-log4j.properties de.arago.connector.cloudwatch.CloudWatchMain"
     if [ "$RUN_USER" != "root" ]; then
        if [ ! -e $LOGFILE ]; then
            touch $LOGFILE
@@ -108,10 +108,10 @@ stop() {
     fi
 
     if [ "x$PIDLIST" != "x" ]; then
-        /bin/kill -9 $PIDLIST
+        /bin/kill $PIDLIST
     fi
 
-    /bin/sleep 1
+    /bin/sleep 3
 
      _status
     RC=$?
