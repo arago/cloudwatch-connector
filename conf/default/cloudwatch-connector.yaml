@@ -12,13 +12,13 @@ aws:
   AWS_ACCESS_KEY:
   AWS_SECRET_KEY:
   sqs-url: https://sqs.eu-west-1.amazonaws.com/xxxxxxxx/ec2-monitoring-events
-  sqs-timeout: 30
-  sqs-messages: 100
+  sqs-timeout: 10
+  sqs-messages: 10
 
 skip-certs-validation: false
 
 model:
-  # used to create issue on Machine naode prefix+aws-instance-id
+  # used to create issue on Machine naode prefix+aws-instanceId
   machine-node-prefix:
   # used to create issue if can not match aws-instance-id
   default-node-id:
