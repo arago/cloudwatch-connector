@@ -15,6 +15,11 @@
             <version>${project.version}</version>
         </dependency>
         <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>xml-util</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
             <groupId>co.arago</groupId>
             <artifactId>hiro-client</artifactId>
             <version>0.9</version>
@@ -32,7 +37,7 @@
         <dependency>
             <groupId>com.amazonaws</groupId>
             <artifactId>aws-java-sdk-sqs</artifactId>
-            <version>1.10.67</version>
+            <version>1.10.77</version>
         </dependency>
     </dependencies>
 
