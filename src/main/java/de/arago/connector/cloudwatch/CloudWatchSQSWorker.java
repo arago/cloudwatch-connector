@@ -15,12 +15,12 @@ import com.amazonaws.services.sqs.model.MessageAttributeValue;
 import com.amazonaws.services.sqs.model.ReceiveMessageRequest;
 import com.amazonaws.services.sqs.model.ReceiveMessageResult;
 import de.arago.commons.configuration.Config;
-import de.arago.commons.configuration.ConfigFactory;
 import de.arago.commons.xmltools.XMLHelper;
 import de.arago.graphit.api.exception.GraphitException;
+import de.arago.graphit.api.util.GraphitCollections;
 import java.io.Closeable;
 import java.io.IOException;
-import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -30,15 +30,15 @@ import net.minidev.json.JSONValue;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 
-public class CloudWatchWorker implements Closeable, Runnable {
+public class CloudWatchSQSWorker implements Closeable, Runnable {
 
-  private static final Logger LOG = Logger.getLogger(CloudWatchWorker.class.getName());
+  private static final Logger LOG = Logger.getLogger(CloudWatchSQSWorker.class.getName());
 
   private static final String VARIABLE_PROCESS_CLOUDWATCH_EVENT = "ProcessCloudWatchEvent";
   private static final String VARIABLE_AWSSQS_ATRIBUTES = "AWSSQSAttributes";
   private static final String VARIABLE_AWSSQS_BODY = "AWSSQSBody";
-  private static final String MSG_ATTR_TYPE = "type";
-  private static final String MSG_ATTR_INSTANCEID = "instanceId";
+
+  private boolean isEnabled;
 
   private String authUrl;
   private String authUser;
@@ -47,7 +47,6 @@ public class CloudWatchWorker implements Closeable, Runnable {
   private String authClientSecret;
 
   private String graphitUrl;
-  private boolean skipCertsCheck;
 
   private String awsKey;
   private String awsSecret;
@@ -63,18 +62,19 @@ public class CloudWatchWorker implements Closeable, Runnable {
   private HiroClient hiro;
   private Thread worker;
 
-  public CloudWatchWorker() {
-  }
-
-  public void configure() {
-    final Config c = ConfigFactory.open("cloudwatch-connector");
+  public void configure(final Config c) {
+    isEnabled = Boolean.parseBoolean(c.getOr("sqs.enabled", "true"));
+    if (!isEnabled) {
+      return;
+    }
 
     awsKey = c.getOr("aws.AWS_ACCESS_KEY", "");
     awsSecret = c.getOr("aws.AWS_SECRET_KEY", "");
-    queueUrl = c.getOr("aws.sqs-url", "");
+
+    queueUrl = c.getOr("sqs.url", "");
 
     if (queueUrl.isEmpty()) {
-      throw new IllegalArgumentException("config does not contain aws queueUrl");
+      throw new IllegalArgumentException("config does not contain sqs queueUrl");
     }
 
     graphitUrl = c.getOr("graphit.url", "");
@@ -89,21 +89,22 @@ public class CloudWatchWorker implements Closeable, Runnable {
     authClientId = c.getOr("auth.clientId", "");
     authClientSecret = c.getOr("auth.clientSecret", "");
 
-    sqsWaitTimeout = Integer.parseInt(c.getOr("aws.sqs-timeout", "10"));
-    sqsMessages = Integer.parseInt(c.getOr("aws.sqs-messages", "10"));
-    sqsMaxConnections = Integer.parseInt(c.getOr("aws.sqs-connections", "50"));
+    sqsWaitTimeout = Integer.parseInt(c.getOr("sqs.timeout", "10"));
+    sqsMessages = Integer.parseInt(c.getOr("sqs.messages", "10"));
+    sqsMaxConnections = Integer.parseInt(c.getOr("sqs.connections", "50"));
 
     modelMachineNodePrefix = c.getOr("model.machine-node-prefix", "");
     modelDefaultNodeId = c.getOr("model.default-node-id", "");
-
-    skipCertsCheck = Boolean.parseBoolean(c.getOr("skip-certs-validation", "false"));
   }
 
   public void start() {
+    if (!isEnabled) {
+      return;
+    }
+
     // Create HIRO client
     ClientBuilder builder = new ClientBuilder()
-      .setRestApiUrl(graphitUrl)
-      .setTrustAllCerts(skipCertsCheck);
+      .setRestApiUrl(graphitUrl);
 
     if (authUser.isEmpty()) {
       builder.setTokenProvider(new TokenBuilder().makeClientCredentials(authUrl, authClientId, authClientSecret));
@@ -120,8 +121,7 @@ public class CloudWatchWorker implements Closeable, Runnable {
       throw new IllegalStateException("could not connect to graphit", t);
     }
 
-    //needs read access to default model node
-    //checkDefaultNode();
+    checkDefaultNode();
     initilaizeVariables();
 
     // Create the basic Amazon SQS async client
@@ -153,10 +153,10 @@ public class CloudWatchWorker implements Closeable, Runnable {
 
   private void checkDefaultNode() {
     try {
-      Map v = hiro.getVariable(modelDefaultNodeId);
+      Map v = hiro.getVertex(modelDefaultNodeId);
       LOG.log(Level.FINE, "default node: {0}", v);
     } catch (GraphitException t) {
-      throw new IllegalStateException("default model node does not found, id=[" + modelDefaultNodeId + "]", t);
+      throw new IllegalStateException("default model node not found, id=[" + modelDefaultNodeId + "]", t);
     }
   }
 
@@ -216,43 +216,35 @@ public class CloudWatchWorker implements Closeable, Runnable {
   }
 
   private boolean process(final Message m) throws Exception {
-
     LOG.log(Level.FINEST, "processing message : {0} : {1} : {2}", new Object[]{m.getMessageId(), m.getMessageAttributes(), m.getBody()});
-
-    MessageAttributeValue type = m.getMessageAttributes().get(MSG_ATTR_TYPE);
-
-    if (type == null) {
-      LOG.log(Level.WARNING, "unknown event type: {0}", m.getMessageAttributes());
-      return false;
-    }
-
-    switch (type.getStringValue()) {
-      case "issue":
-        return createIssue(m);
-      default:
-        LOG.log(Level.WARNING, "unknown event type: {0}", type.getStringValue());
-        return false;
-    }
+    return createIssue(getInstanceId(m.getBody()), m);
   }
 
-  private boolean createIssue(Message m) throws Exception {
+  private boolean createIssue(String instanceId, Message m) throws Exception {
     String nodeId = modelDefaultNodeId;
-    MessageAttributeValue instanceId = m.getMessageAttributes().get(MSG_ATTR_INSTANCEID);
-    if (instanceId == null || instanceId.getStringValue().isEmpty()) {
+    if (instanceId == null || instanceId.isEmpty()) {
       if (modelDefaultNodeId.isEmpty()) {
         LOG.log(Level.WARNING, "skipping issue creation: missing instanceId in attributes");
         return true;
       }
     } else if (!modelMachineNodePrefix.isEmpty()) {
-      nodeId = modelMachineNodePrefix + instanceId.getStringValue();
+      nodeId = modelMachineNodePrefix + instanceId;
     }
 
-    //TODO if nodeId does not exists use default node?
+    try {
+      hiro.getVertex(nodeId);
+    } catch (GraphitException t) {
+      if (t.getCode() == 404) {
+        LOG.log(Level.FINE, "node for issue does not exists: {0}", nodeId);
+        nodeId = modelDefaultNodeId;
+      }
+    }
+
     String issueXml = toIssueXML(m, nodeId);
 
     LOG.log(Level.FINE, "issue xml: {0}", issueXml);
 
-    final Map v = new HashMap();
+    final Map v = GraphitCollections.newMap();
     v.put("ogit/Automation/issueFormalRepresentation", issueXml);
 
     try {
@@ -280,7 +272,7 @@ public class CloudWatchWorker implements Closeable, Runnable {
     Element el = doc.createElement("Issue");
     el.setAttribute("NodeID", nodeId);
     el.setAttribute("xmlns", "https://graphit.co/schemas/v2/IssueSchema");
-    el.setAttribute("IssueSubject", "CloudWatch Event");
+    el.setAttribute("IssueSubject", getSubjectFromBody(m.getBody()));
 
     Element el1 = doc.createElement(VARIABLE_PROCESS_CLOUDWATCH_EVENT);
     Element el1c = doc.createElement("Content");
@@ -296,7 +288,7 @@ public class CloudWatchWorker implements Closeable, Runnable {
 
     Element el3 = doc.createElement(VARIABLE_AWSSQS_BODY);
     Element el3c = doc.createElement("Content");
-    el3c.setAttribute("Value", m.getBody());
+    el3c.setAttribute("Value", getMessageFromBody(m.getBody()));
     el3.appendChild(el3c);
     el.appendChild(el3);
 
@@ -304,11 +296,54 @@ public class CloudWatchWorker implements Closeable, Runnable {
   }
 
   private Map parseMessageAttributes(Map<String, MessageAttributeValue> messageAttributes) {
-    final Map ret = new HashMap();
+    final Map ret = GraphitCollections.newMap();
     for (Map.Entry<String, MessageAttributeValue> attr : messageAttributes.entrySet()) {
       ret.put(attr.getKey(), attr.getValue().getStringValue());
     }
 
     return ret;
+  }
+
+  public String getInstanceId(String body) {
+    Object o = JSONValue.parse(body);
+    if (o instanceof Map) {
+      Object o0 = ((Map) o).get("Message");
+      if (o0 instanceof Map) {
+        Object o1 = ((Map) o0).get("Trigger");
+        if (o1 instanceof Map) {
+          Object o2 = ((Map) o1).get("Dimensions");
+          if (o2 instanceof List) {
+            for (Object d : (List) o2) {
+              if (d instanceof Map) {
+                Map dim = (Map) d;
+                String n = dim.get("name") + "";
+                if (n.equals("InstanceId")) {
+                  return dim.get("value") + "";
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    return "";
+  }
+
+  private String getSubjectFromBody(String body) {
+    Object o = JSONValue.parse(body);
+    if (o instanceof Map) {
+      Map mp = (Map) o;
+      return mp.get("Subject") + "";
+    }
+    return "";
+  }
+
+  private String getMessageFromBody(String body) {
+    Object o = JSONValue.parse(body);
+    if (o instanceof Map) {
+      Map mp = (Map) o;
+      return mp.get("Message") + "";
+    }
+    return "";
   }
 }

@@ -1,5 +1,7 @@
 package de.arago.connector.cloudwatch;
 
+import de.arago.commons.configuration.Config;
+import de.arago.commons.configuration.ConfigFactory;
 import java.io.File;
 import java.io.IOException;
 import java.util.concurrent.CountDownLatch;
@@ -17,17 +19,25 @@ public class CloudWatchMain {
   }
 
   private void run() throws Exception {
-    final CloudWatchWorker worker = new CloudWatchWorker();
+    final Config c = ConfigFactory.open("cloudwatch-connector");
 
-    worker.configure();
-    worker.start();
+    final CloudWatchSQSWorker sqs = new CloudWatchSQSWorker();
+
+    sqs.configure(c);
+    sqs.start();
+
+    final CloudWatchMonitorWorker monitoring = new CloudWatchMonitorWorker();
+
+    monitoring.configure(c);
+    monitoring.start();
 
     Runtime.getRuntime().addShutdownHook(new Thread(new Runnable() {
       @Override
       public void run() {
         LOG.info("[WORKER] stopping ...");
         try {
-          worker.close();
+          sqs.close();
+          monitoring.close();
         } catch (IOException ex) {
           LOG.log(Level.SEVERE, null, ex);
         }

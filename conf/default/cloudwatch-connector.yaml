@@ -2,7 +2,7 @@ graphit:
   url: "http://localhost:8888/"
 
 auth:
-  url: https://xxxx:9443/oauth2/token
+  url: "https://xxxx:9443/oauth2/token"
   clientId: xxxxxxxxxxxxxxxxxxxxxxxxxxxx
   clientSecret: xxxxxxxxxxxxxxxxxxxxxxxxxxxx
   username:
@@ -11,11 +11,31 @@ auth:
 aws:
   AWS_ACCESS_KEY:
   AWS_SECRET_KEY:
-  sqs-url: https://sqs.eu-west-1.amazonaws.com/xxxxxxxx/ec2-monitoring-events
-  sqs-timeout: 10
-  sqs-messages: 10
 
-skip-certs-validation: false
+sqs:
+  enabled: true
+  url: "https://sqs.eu-west-1.amazonaws.com/xxxxxxxx/ec2-monitoring-events"
+  timeout: 10
+  messages: 10
+
+cloudwatch:
+  enabled: true
+  endpoint: "monitoring.eu-west-1.amazonaws.com"
+  batch-size: 500
+  poll-interval-sec: 300
+  default-periodity: 180
+  default-transform: "Average"
+  namespaces:
+    - "AWS/EC2"
+  metrics-periodities:
+    - name: "All"
+      periodity: 180
+  metrics-transforms:
+    - name: "All"
+      type: "Average"
+  metrics-names:
+    - "All"
+  #  - "CPUUtilization"
 
 model:
   # used to create issue on Machine naode prefix+aws-instanceId
