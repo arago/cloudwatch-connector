@@ -17,6 +17,7 @@ import com.amazonaws.services.cloudwatch.model.ListMetricsResult;
 import com.amazonaws.services.cloudwatch.model.Metric;
 import de.arago.commons.configuration.Config;
 import de.arago.graphit.api.exception.GraphitException;
+import de.arago.graphit.api.ontology.Constants;
 import de.arago.graphit.api.ontology.OntologyAttribute;
 import de.arago.graphit.api.ontology.OntologyEntity;
 import de.arago.graphit.api.util.GraphitCollections;
@@ -315,13 +316,13 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
       String query = "ogit\\/_id:" + modelMachineNodePrefix.replace(":", "\\:") + "*";
       final Map qParams = GraphitCollections.newMap();
       qParams.put("limit", "-1");
-      qParams.put("fields", OntologyAttribute.OGIT__ID);
+      qParams.put("fields", Constants.Attributes.OGIT__ID);
       final List result = hiro.vertexQuery(query, qParams);
       LOG.log(Level.FINEST, "discovered nodes={0}", result);
       for (Object v : result) {
         Object j = JSONValue.parse("" + v);
         if (j instanceof Map) {
-          String ogitId = (String) ((Map) j).get(OntologyAttribute.OGIT__ID);
+          String ogitId = (String) ((Map) j).get(Constants.Attributes.OGIT__ID);
           knownInstanceIds.add(ogitId.replace(modelMachineNodePrefix, ""));
         }
       }
@@ -336,7 +337,7 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
       String query = "ogit\\/_type:$ntype AND \\/MAIDType:$mtype";
       final Map qParams = GraphitCollections.newMap();
       qParams.put("limit", "-1");
-      qParams.put("ntype", OntologyEntity.OGIT_TIMESERIES);
+      qParams.put("ntype", Constants.Entities.OGIT_TIMESERIES);
       qParams.put("mtype", TIMESERIES_MAIDTYPE);
       final List result = hiro.vertexQuery(query, qParams);
       LOG.log(Level.FINEST, "discovered timeseries meta={0}", result);
@@ -396,7 +397,7 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
         if (meta == null) {
           tsid = createTimeseries(dimensions, instanceId, metricName, units, startTimestamp);
         } else {
-          tsid = (String) ((Map) meta).get(OntologyAttribute.OGIT__ID);
+          tsid = (String) ((Map) meta).get(Constants.Attributes.OGIT__ID);
         }
 
         if (tsid != null && !tsid.isEmpty() && !mData.getValue().isEmpty()) {
@@ -423,16 +424,16 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
       params.put("/Units", units);
     }
     if (params.containsKey("/MountPath")) {
-      params.put(OntologyAttribute.OGIT_NAME, metricName + " " + params.get("/MountPath"));
+      params.put(Constants.Attributes.OGIT_NAME, metricName + " " + params.get("/MountPath"));
     } else {
-      params.put(OntologyAttribute.OGIT_NAME, metricName);
+      params.put(Constants.Attributes.OGIT_NAME, metricName);
     }
 
     try {
-      Map createVertexResp = hiro.createVertex(OntologyEntity.OGIT_TIMESERIES, params);
-      LOG.log(Level.INFO, "created timeseries vertex: {0}", createVertexResp.get(OntologyAttribute.OGIT__ID));
+      Map createVertexResp = hiro.createVertex(Constants.Entities.OGIT_TIMESERIES, params);
+      LOG.log(Level.INFO, "created timeseries vertex: {0}", createVertexResp.get(Constants.Attributes.OGIT__ID));
       LOG.log(Level.FINEST, "created timeseries vertex: {0}", createVertexResp);
-      return (String) createVertexResp.get(OntologyAttribute.OGIT__ID);
+      return (String) createVertexResp.get(Constants.Attributes.OGIT__ID);
     } catch (GraphitException g) {
       LOG.log(Level.WARNING, "can not create timeseries vertex: " + params, g);
     }
