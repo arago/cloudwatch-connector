@@ -8,11 +8,13 @@
 
 
 **Components**
+
 Connector uses following AWS services https://aws.amazon.com/cloudwatch/ and https://aws.amazon.com/sqs/ to do following:
 1. Transforms CloudWatch Alarms into AutomationIssue.
 2. Read CloudWatch Metrics and save as Timeseries.
 
 **Requirements**
+
 - access to AWS console
 - access to WSO2 console
 - could be installed on ec2 machine or any other local machine(requires AWS credentials)
