@@ -18,8 +18,6 @@ import com.amazonaws.services.cloudwatch.model.Metric;
 import de.arago.commons.configuration.Config;
 import de.arago.graphit.api.exception.GraphitException;
 import de.arago.graphit.api.ontology.Constants;
-import de.arago.graphit.api.ontology.OntologyAttribute;
-import de.arago.graphit.api.ontology.OntologyEntity;
 import de.arago.graphit.api.util.GraphitCollections;
 import java.io.Closeable;
 import java.io.IOException;
@@ -423,8 +421,11 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
     if (!units.isEmpty()) {
       params.put("/Units", units);
     }
+
     if (params.containsKey("/MountPath")) {
       params.put(Constants.Attributes.OGIT_NAME, metricName + " " + params.get("/MountPath"));
+    } else if (params.containsKey("/ProcessName")) {
+      params.put(Constants.Attributes.OGIT_NAME, metricName + " " + params.get("/ProcessName"));
     } else {
       params.put(Constants.Attributes.OGIT_NAME, metricName);
     }
