@@ -23,9 +23,8 @@ public class CloudWatchAlarmMessage {
   }
 
   CloudWatchAlarmMessage(final Message m) {
-    body = m.getBody();
     parseMessageAttributes(m.getMessageAttributes());
-    parseBody(body);
+    parseBody(m.getBody());
   }
 
   public Map getAttributes() {
@@ -79,6 +78,7 @@ public class CloudWatchAlarmMessage {
       subject = root.get("Subject") + "";
 
       Object o0 = root.get("Message");
+      this.body = o0 + "";
       if (o0 instanceof String) {
         o0 = JSONValue.parse(o0 + "");
       }
