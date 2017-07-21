@@ -19,7 +19,6 @@ import de.arago.graphit.api.exception.GraphitException;
 import de.arago.graphit.api.util.GraphitCollections;
 import java.io.Closeable;
 import java.io.IOException;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.logging.Level;
@@ -241,7 +240,7 @@ public class CloudWatchSQSWorker implements Closeable, Runnable {
 
     final CloudWatchAlarmMessage msg = new CloudWatchAlarmMessage(m);
 
-    LOG.log(Level.FINEST, "parsed message: {0}", m.toString());
+    LOG.log(Level.FINEST, "parsed message: {0}", msg.toString());
 
     if (skipTransitions.containsKey(msg.getOldStateValue()) && skipTransitions.get(msg.getOldStateValue()).contains(msg.getNewStateValue())) {
       LOG.log(Level.FINE, "skipping event bcs of defined transition type: {0}", m.toString());

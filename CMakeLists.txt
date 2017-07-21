@@ -127,6 +127,7 @@ set(CPACK_RPM_USER_FILELIST
 "%ignore /opt/autopilot/conf/default"
 "%ignore /usr"
 "%config(noreplace) /etc/init.d/*"
+"%config(noreplace) /opt/autopilot/conf/*"
 )
 SET(CPACK_INSTALLED_DIRECTORIES
     "${builddir}" "${rpm_target_dir}"
