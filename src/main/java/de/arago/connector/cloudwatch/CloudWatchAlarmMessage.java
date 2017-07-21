@@ -79,6 +79,10 @@ public class CloudWatchAlarmMessage {
       subject = root.get("Subject") + "";
 
       Object o0 = root.get("Message");
+      if (o0 instanceof String) {
+        o0 = JSONValue.parse(o0 + "");
+      }
+
       if (o0 instanceof Map) {
         Map message = (Map) o0;
 
