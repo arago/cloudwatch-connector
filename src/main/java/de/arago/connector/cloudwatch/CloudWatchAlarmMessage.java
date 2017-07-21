@@ -22,7 +22,7 @@ public class CloudWatchAlarmMessage {
     parseBody(body);
   }
 
-  CloudWatchAlarmMessage(Message m) {
+  CloudWatchAlarmMessage(final Message m) {
     body = m.getBody();
     parseMessageAttributes(m.getMessageAttributes());
     parseBody(body);
@@ -56,6 +56,22 @@ public class CloudWatchAlarmMessage {
     return dimmensions;
   }
 
+  @Override
+  public String toString() {
+    return toMap() + "";
+  }
+
+  private Map toMap() {
+    final Map ret = GraphitCollections.newMap();
+    ret.put("instanceId", instanceId);
+    ret.put("subject", subject);
+    ret.put("oldState", oldState);
+    ret.put("newState", newState);
+    ret.put("dimmensions", dimmensions);
+    ret.put("attributes", attributes);
+    return ret;
+  }
+
   private void parseBody(String body) {
     Object o = JSONValue.parse(body);
     if (o instanceof Map) {
@@ -66,8 +82,8 @@ public class CloudWatchAlarmMessage {
       if (o0 instanceof Map) {
         Map message = (Map) o0;
 
-        newState = (String) message.get("NewStateValue");
-        oldState = (String) message.get("OldStateValue");
+        newState = message.get("NewStateValue") + "";
+        oldState = message.get("OldStateValue") + "";
 
         Object o1 = message.get("Trigger");
         if (o1 instanceof Map) {

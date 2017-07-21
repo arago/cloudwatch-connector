@@ -49,6 +49,8 @@ public class CloudWatchSQSWorkerTest {
 
     final CloudWatchAlarmMessage m = new CloudWatchAlarmMessage(body);
 
+    System.out.println(m.toString());
+
     assertEquals("i-xxxx", m.getInstanceId());
     assertEquals("INSUFFICIENT_DATA", m.getOldStateValue());
     assertEquals("OK", m.getNewStateValue());

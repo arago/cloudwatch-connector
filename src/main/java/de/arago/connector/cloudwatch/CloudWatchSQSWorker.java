@@ -21,6 +21,7 @@ import java.io.Closeable;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import javax.xml.parsers.DocumentBuilder;
@@ -57,7 +58,7 @@ public class CloudWatchSQSWorker implements Closeable, Runnable {
   private String modelMachineNodePrefix;
   private String modelDefaultNodeId;
 
-  private final Map<String, List<String>> skipTransitions = GraphitCollections.newConcurrentMap();
+  private final Map<String, Set<String>> skipTransitions = GraphitCollections.newConcurrentMap();
 
   private AmazonSQSBufferedAsyncClient bufferedSQS;
   private HiroClient hiro;
@@ -103,11 +104,11 @@ public class CloudWatchSQSWorker implements Closeable, Runnable {
         String from = sub.get("from");
         String to = sub.get("to");
         if (from != null && to != null) {
-          List<String> l = skipTransitions.get(from);
+          Set<String> l = skipTransitions.get(from);
           if (l != null) {
             l.add(to);
           } else {
-            l = GraphitCollections.newList();
+            l = GraphitCollections.newSet();
             l.add(to);
             skipTransitions.put(from, l);
           }
@@ -237,10 +238,14 @@ public class CloudWatchSQSWorker implements Closeable, Runnable {
 
   private boolean process(final Message m) throws Exception {
     LOG.log(Level.FINEST, "processing message : {0} : {1} : {2}", new Object[]{m.getMessageId(), m.getMessageAttributes(), m.getBody()});
+
     final CloudWatchAlarmMessage msg = new CloudWatchAlarmMessage(m);
 
-    if (skipTransitions.containsKey(msg.getOldStateValue())) {
+    LOG.log(Level.FINEST, "parsed message: {0}", m.toString());
 
+    if (skipTransitions.containsKey(msg.getOldStateValue()) && skipTransitions.get(msg.getOldStateValue()).contains(msg.getNewStateValue())) {
+      LOG.log(Level.FINE, "skipping event bcs of defined transition type: {0}", m.toString());
+      return true;
     }
 
     return createIssue(msg);
