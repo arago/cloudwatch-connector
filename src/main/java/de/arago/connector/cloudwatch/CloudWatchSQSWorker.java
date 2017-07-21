@@ -11,7 +11,6 @@ import com.amazonaws.services.sqs.buffered.AmazonSQSBufferedAsyncClient;
 import com.amazonaws.services.sqs.model.GetQueueAttributesRequest;
 import com.amazonaws.services.sqs.model.GetQueueAttributesResult;
 import com.amazonaws.services.sqs.model.Message;
-import com.amazonaws.services.sqs.model.MessageAttributeValue;
 import com.amazonaws.services.sqs.model.ReceiveMessageRequest;
 import com.amazonaws.services.sqs.model.ReceiveMessageResult;
 import de.arago.commons.configuration.Config;
@@ -58,6 +57,8 @@ public class CloudWatchSQSWorker implements Closeable, Runnable {
   private String modelMachineNodePrefix;
   private String modelDefaultNodeId;
 
+  private final Map<String, List<String>> skipTransitions = GraphitCollections.newConcurrentMap();
+
   private AmazonSQSBufferedAsyncClient bufferedSQS;
   private HiroClient hiro;
   private Thread worker;
@@ -95,6 +96,25 @@ public class CloudWatchSQSWorker implements Closeable, Runnable {
 
     modelMachineNodePrefix = c.getOr("model.machine-node-prefix", "");
     modelDefaultNodeId = c.getOr("model.default-node-id", "");
+
+    Config transforms = c.getConfig("sqs.skip-status-transitions");
+    if (transforms != null) {
+      for (Config sub : transforms.getSubs()) {
+        String from = sub.get("from");
+        String to = sub.get("to");
+        if (from != null && to != null) {
+          List<String> l = skipTransitions.get(from);
+          if (l != null) {
+            l.add(to);
+          } else {
+            l = GraphitCollections.newList();
+            l.add(to);
+            skipTransitions.put(from, l);
+          }
+        }
+      }
+    }
+    LOG.log(Level.FINE, "skip-status-transitions={0}", skipTransitions);
   }
 
   public void start() {
@@ -217,30 +237,37 @@ public class CloudWatchSQSWorker implements Closeable, Runnable {
 
   private boolean process(final Message m) throws Exception {
     LOG.log(Level.FINEST, "processing message : {0} : {1} : {2}", new Object[]{m.getMessageId(), m.getMessageAttributes(), m.getBody()});
-    return createIssue(getInstanceId(m.getBody()), m);
+    final CloudWatchAlarmMessage msg = new CloudWatchAlarmMessage(m);
+
+    if (skipTransitions.containsKey(msg.getOldStateValue())) {
+
+    }
+
+    return createIssue(msg);
   }
 
-  private boolean createIssue(String instanceId, Message m) throws Exception {
+  private boolean createIssue(CloudWatchAlarmMessage msg) throws Exception {
+
     String nodeId = modelDefaultNodeId;
-    if (instanceId == null || instanceId.isEmpty()) {
+    if (msg.getInstanceId() == null || msg.getInstanceId().isEmpty()) {
       if (modelDefaultNodeId.isEmpty()) {
         LOG.log(Level.WARNING, "skipping issue creation: missing instanceId in attributes");
         return true;
       }
     } else if (!modelMachineNodePrefix.isEmpty()) {
-      nodeId = modelMachineNodePrefix + instanceId;
+      nodeId = modelMachineNodePrefix + msg.getInstanceId();
     }
 
     try {
       hiro.getVertex(nodeId);
     } catch (GraphitException t) {
       if (t.getCode() == 404) {
-        LOG.log(Level.FINE, "node for issue does not exists: {0}", nodeId);
+        LOG.log(Level.WARNING, "node for issue does not exists: {0}, using default: {1}", new Object[]{nodeId, modelDefaultNodeId});
         nodeId = modelDefaultNodeId;
       }
     }
 
-    String issueXml = toIssueXML(m, nodeId);
+    String issueXml = toIssueXML(msg, nodeId);
 
     LOG.log(Level.FINE, "issue xml: {0}", issueXml);
 
@@ -259,20 +286,20 @@ public class CloudWatchSQSWorker implements Closeable, Runnable {
     return true;
   }
 
-  private String toIssueXML(Message m, String nodeId) throws Exception {
+  private String toIssueXML(CloudWatchAlarmMessage msg, String nodeId) throws Exception {
     DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
     DocumentBuilder builder = dbf.newDocumentBuilder();
     Document doc = builder.newDocument();
-    Element xml = getElement(m, nodeId, doc);
+    Element xml = getElement(msg, nodeId, doc);
 
     return XMLHelper.toXML(xml);
   }
 
-  private Element getElement(Message m, String nodeId, Document doc) {
+  private Element getElement(CloudWatchAlarmMessage msg, String nodeId, Document doc) {
     Element el = doc.createElement("Issue");
     el.setAttribute("NodeID", nodeId);
     el.setAttribute("xmlns", "https://graphit.co/schemas/v2/IssueSchema");
-    el.setAttribute("IssueSubject", getSubjectFromBody(m.getBody()));
+    el.setAttribute("IssueSubject", msg.getSubject());
 
     Element el1 = doc.createElement(VARIABLE_PROCESS_CLOUDWATCH_EVENT);
     Element el1c = doc.createElement("Content");
@@ -282,68 +309,16 @@ public class CloudWatchSQSWorker implements Closeable, Runnable {
 
     Element el2 = doc.createElement(VARIABLE_AWSSQS_ATRIBUTES);
     Element el2c = doc.createElement("Content");
-    el2c.setAttribute("Value", JSONValue.toJSONString(parseMessageAttributes(m.getMessageAttributes())));
+    el2c.setAttribute("Value", JSONValue.toJSONString(msg.getAttributes()));
     el2.appendChild(el2c);
     el.appendChild(el2);
 
     Element el3 = doc.createElement(VARIABLE_AWSSQS_BODY);
     Element el3c = doc.createElement("Content");
-    el3c.setAttribute("Value", getMessageFromBody(m.getBody()));
+    el3c.setAttribute("Value", msg.getBody());
     el3.appendChild(el3c);
     el.appendChild(el3);
 
     return el;
-  }
-
-  private Map parseMessageAttributes(Map<String, MessageAttributeValue> messageAttributes) {
-    final Map ret = GraphitCollections.newMap();
-    for (Map.Entry<String, MessageAttributeValue> attr : messageAttributes.entrySet()) {
-      ret.put(attr.getKey(), attr.getValue().getStringValue());
-    }
-
-    return ret;
-  }
-
-  public String getInstanceId(String body) {
-    Object o = JSONValue.parse(body);
-    if (o instanceof Map) {
-      Object o0 = ((Map) o).get("Message");
-      if (o0 instanceof Map) {
-        Object o1 = ((Map) o0).get("Trigger");
-        if (o1 instanceof Map) {
-          Object o2 = ((Map) o1).get("Dimensions");
-          if (o2 instanceof List) {
-            for (Object d : (List) o2) {
-              if (d instanceof Map) {
-                Map dim = (Map) d;
-                String n = dim.get("name") + "";
-                if (n.equals("InstanceId")) {
-                  return dim.get("value") + "";
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-    return "";
-  }
-
-  private String getSubjectFromBody(String body) {
-    Object o = JSONValue.parse(body);
-    if (o instanceof Map) {
-      Map mp = (Map) o;
-      return mp.get("Subject") + "";
-    }
-    return "";
-  }
-
-  private String getMessageFromBody(String body) {
-    Object o = JSONValue.parse(body);
-    if (o instanceof Map) {
-      Map mp = (Map) o;
-      return mp.get("Message") + "";
-    }
-    return "";
   }
 }
