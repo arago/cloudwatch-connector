@@ -187,83 +187,92 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
   @Override
   public void run() {
     while (!Thread.currentThread().isInterrupted()) {
-      long then = new Date().getTime();
-      int count = 0;
+      try {
+        long then = new Date().getTime();
+        int count = 0;
 
-      discoverInstancesFromModel();
-      discoverTimeseriesMetadata();
+        discoverInstancesFromModel();
+        discoverTimeseriesMetadata();
 
-      for (String namespace : namespaces) {
-        final List<Metric> metricsList = getMetricsList(namespace, INSTANCEID);
-        LOG.log(Level.FINE, "metrics count: {0} for {1}", new Object[]{metricsList.size(), namespace});
+        for (String namespace : namespaces) {
+          final List<Metric> metricsList = getMetricsList(namespace, INSTANCEID);
+          LOG.log(Level.FINE, "metrics count: {0} for {1}", new Object[]{metricsList.size(), namespace});
 
-        if (LOG.isLoggable(Level.FINEST)) {
-          for (Metric metric : metricsList) {
-            LOG.log(Level.FINEST, "metric: {0}", metric.toString());
+          if (LOG.isLoggable(Level.FINEST)) {
+            for (Metric metric : metricsList) {
+              LOG.log(Level.FINEST, "metric: {0}", metric.toString());
+            }
+          }
+
+          final Map<String, Map<String, List<Datapoint>>> metricsData = GraphitCollections.newConcurrentMap();
+          long currentTimestamp = (new Date()).getTime();
+
+          for (final Metric metric : metricsList) {
+            if (Thread.currentThread().isInterrupted()) {
+              break;
+            }
+
+            final String instanceId = getInstanceId(metric.getDimensions());
+
+            if (!metricsData.containsKey(instanceId)) {
+              metricsData.put(instanceId, new ConcurrentHashMap<>());
+            }
+
+            if (!metricsData.get(instanceId).containsKey(metric.getMetricName())) {
+              final String metricName = metric.getMetricName();
+              long startTimestamp = calculateMetricsStart(instanceId, metricName);
+              long endTimestamp = calculateMetricsEnd(metricName, currentTimestamp, startTimestamp);
+              int periodity = getPeriodity(metricName);
+              if (startTimestamp + 1000 * defaultPeriodity > endTimestamp) {
+                continue;
+              }
+
+              try {
+                final GetMetricStatisticsRequest request = new GetMetricStatisticsRequest()
+                  .withNamespace(namespace)
+                  .withDimensions(metric.getDimensions())
+                  .withMetricName(metricName)
+                  .withPeriod(periodity)
+                  .withStatistics(getTransform(metricName))
+                  .withStartTime(new Date(startTimestamp))
+                  .withEndTime(new Date(endTimestamp));
+                final GetMetricStatisticsResult result = cloudwatchClient.getMetricStatistics(request);
+                final List<Datapoint> dataPoints = result.getDatapoints();
+                if (dataPoints != null && !dataPoints.isEmpty()) {
+                  metricsData.get(instanceId).put(metricName, dataPoints);
+                  if (LOG.isLoggable(Level.FINEST)) {
+                    LOG.log(Level.FINEST, "data: {0}", dataPoints);
+                  }
+                }
+              } catch (Exception e) {
+                LOG.log(Level.WARNING, "Error while getting the metrics for instanceId: " + instanceId + " metric: " + metric.getMetricName(), e);
+              }
+              ++count;
+
+              storeMetricsData(metric.getDimensions(), metricsData, startTimestamp);
+            }
           }
         }
 
-        final Map<String, Map<String, List<Datapoint>>> metricsData = GraphitCollections.newConcurrentMap();
-        long currentTimestamp = (new Date()).getTime();
+        long processTime = new Date().getTime() - then;
+        LOG.log(Level.INFO, "metrics processed count: {0}, time: {1} ms", new Object[]{count, processTime});
 
-        for (final Metric metric : metricsList) {
+        for (int i = 0; i < metricsPollInterval; ++i) {
           if (Thread.currentThread().isInterrupted()) {
             break;
           }
-
-          final String instanceId = getInstanceId(metric.getDimensions());
-
-          if (!metricsData.containsKey(instanceId)) {
-            metricsData.put(instanceId, new ConcurrentHashMap<String, List<Datapoint>>());
-          }
-
-          if (!metricsData.get(instanceId).containsKey(metric.getMetricName())) {
-            final String metricName = metric.getMetricName();
-            long startTimestamp = calculateMetricsStart(instanceId, metricName);
-            long endTimestamp = calculateMetricsEnd(metricName, currentTimestamp, startTimestamp);
-            int periodity = getPeriodity(metricName);
-            if (startTimestamp + 1000 * defaultPeriodity > endTimestamp) {
-              continue;
-            }
-
-            try {
-              final GetMetricStatisticsRequest request = new GetMetricStatisticsRequest()
-                .withNamespace(namespace)
-                .withDimensions(metric.getDimensions())
-                .withMetricName(metricName)
-                .withPeriod(periodity)
-                .withStatistics(getTransform(metricName))
-                .withStartTime(new Date(startTimestamp))
-                .withEndTime(new Date(endTimestamp));
-              final GetMetricStatisticsResult result = cloudwatchClient.getMetricStatistics(request);
-              final List<Datapoint> dataPoints = result.getDatapoints();
-              if (dataPoints != null && !dataPoints.isEmpty()) {
-                metricsData.get(instanceId).put(metricName, dataPoints);
-                if (LOG.isLoggable(Level.FINEST)) {
-                  LOG.log(Level.FINEST, "data: {0}", dataPoints);
-                }
-              }
-            } catch (Exception e) {
-              LOG.log(Level.WARNING, "Error while getting the metrics for instanceId: " + instanceId + " metric: " + metric.getMetricName(), e);
-            }
-            ++count;
-
-            storeMetricsData(metric.getDimensions(), metricsData, startTimestamp);
+          try {
+            Thread.sleep(1000);
+          } catch (InterruptedException ex) {
+            //blank
           }
         }
-      }
-
-      long processTime = new Date().getTime() - then;
-      LOG.log(Level.INFO, "metrics processed count: {0}, time: {1} ms", new Object[]{count, processTime});
-
-      for (int i = 0; i < metricsPollInterval; ++i) {
-        if (Thread.currentThread().isInterrupted()) {
-          break;
-        }
+      } catch (Throwable t) {
+        LOG.log(Level.WARNING, "error processing metrics", t);
         try {
-          Thread.sleep(1000);
+          Thread.sleep(5000);
         } catch (InterruptedException ex) {
-          //blank
+          LOG.log(Level.SEVERE, null, ex);
         }
       }
     }
