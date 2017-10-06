@@ -353,7 +353,7 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
         if (j instanceof Map) {
           Map m = (Map) j;
           String instanceId = ((String) m.get("/nodeID")).replace(modelMachineNodePrefix, "");
-          String dataName = (String) m.get("/DataName");
+          String dataName = (String) m.get(Constants.Attributes.OGIT_NAME);
           if (!timeseriesMeta.containsKey(instanceId)) {
             timeseriesMeta.put(instanceId, GraphitCollections.newMap());
           }
@@ -398,8 +398,9 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
       while (iter.hasNext()) {
         Map.Entry<String, List<Datapoint>> mData = iter.next();
         String metricName = mData.getKey();
+        String fullMetricName = getFullMetricName(metricName, dimensions);
         String units = getUnits(mData.getValue());
-        Object meta = timeseriesMeta.get(instanceId).get(metricName);
+        Object meta = timeseriesMeta.get(instanceId).get(fullMetricName);
         String tsid;
         if (meta == null) {
           tsid = createTimeseries(dimensions, instanceId, metricName, units, startTimestamp);
@@ -408,7 +409,7 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
         }
 
         if (tsid != null && !tsid.isEmpty() && !mData.getValue().isEmpty()) {
-          if (writeTimeseriesValues(tsid, mData.getValue(), metricName)) {
+          if (writeTimeseriesValues(tsid, mData.getValue())) {
             iter.remove();
           }
         }
@@ -431,13 +432,7 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
       params.put("/Units", units);
     }
 
-    if (params.containsKey("/MountPath")) {
-      params.put(Constants.Attributes.OGIT_NAME, metricName + " " + params.get("/MountPath"));
-    } else if (params.containsKey("/ProcessName")) {
-      params.put(Constants.Attributes.OGIT_NAME, metricName + " " + params.get("/ProcessName"));
-    } else {
-      params.put(Constants.Attributes.OGIT_NAME, metricName);
-    }
+    params.put(Constants.Attributes.OGIT_NAME, getFullMetricName(metricName, dimensions));
 
     try {
       Map createVertexResp = hiro.createVertex(Constants.Entities.OGIT_TIMESERIES, params);
@@ -450,21 +445,7 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
     return "";
   }
 
-  private void updateTimeseries(String tsid, long storeto, String metricName) {
-    final Map params = GraphitCollections.newMap();
-    String storeToStr = (storeto / 1000) + "";
-    params.put("/KeyValueStore.StoredTo", storeToStr);
-    params.put("/Periodity", getPeriodity(metricName) + "");
-    params.put("/Transformation", getTransform(metricName));
-    try {
-      Map updateVertexResp = hiro.updateVertex(tsid, params);
-      LOG.log(Level.FINEST, "updated timeseries vertex: {0}", updateVertexResp);
-    } catch (GraphitException g) {
-      LOG.log(Level.WARNING, "failed to update timeseries vertex: " + params, g);
-    }
-  }
-
-  private boolean writeTimeseriesValues(String tsid, final List<Datapoint> mData, String metricName) {
+  private boolean writeTimeseriesValues(String tsid, final List<Datapoint> mData) {
     long storeto = 0L;
     final List<TimeseriesValue> values = GraphitCollections.newList();
     for (final Datapoint val : mData) {
@@ -477,7 +458,6 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
     try {
       hiro.updateTsValues(tsid, values);
       LOG.log(Level.FINEST, "pushed timeseries values: {0} count={1}", new Object[]{tsid, values.size()});
-      updateTimeseries(tsid, storeto, metricName);
     } catch (GraphitException g) {
       LOG.log(Level.WARNING, "failed to update timeseries values for: " + tsid, g);
       return false;
@@ -517,5 +497,20 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
       return mData.get(0).getUnit();
     }
     return "";
+  }
+
+  private String getFullMetricName(String metricName, List<Dimension> dimensions) {
+    final Map params = GraphitCollections.newMap();
+    for (Dimension d : dimensions) {
+      params.put(d.getName(), d.getValue() + "");
+    }
+
+    if (params.containsKey("MountPath")) {
+      return metricName + " " + params.get("MountPath");
+    } else if (params.containsKey("ProcessName")) {
+      return metricName + " " + params.get("ProcessName");
+    } else {
+      return metricName;
+    }
   }
 }
