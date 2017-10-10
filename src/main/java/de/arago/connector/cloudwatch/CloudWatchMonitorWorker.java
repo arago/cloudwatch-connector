@@ -409,7 +409,7 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
         }
 
         if (tsid != null && !tsid.isEmpty() && !mData.getValue().isEmpty()) {
-          if (writeTimeseriesValues(tsid, mData.getValue())) {
+          if (writeTimeseriesValues(tsid, mData.getValue(), metricName)) {
             iter.remove();
           }
         }
@@ -445,7 +445,21 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
     return "";
   }
 
-  private boolean writeTimeseriesValues(String tsid, final List<Datapoint> mData) {
+  private void updateTimeseries(String tsid, long storeto, String metricName) {
+    final Map params = GraphitCollections.newMap();
+    String storeToStr = (storeto / 1000) + "";
+    params.put("/KeyValueStore.StoredTo", storeToStr);
+    params.put("/Periodity", getPeriodity(metricName) + "");
+    params.put("/Transformation", getTransform(metricName));
+    try {
+      Map updateVertexResp = hiro.updateVertex(tsid, params);
+      LOG.log(Level.FINEST, "updated timeseries vertex: {0}", updateVertexResp);
+    } catch (GraphitException g) {
+      LOG.log(Level.WARNING, "failed to update timeseries vertex: " + params, g);
+    }
+  }
+
+  private boolean writeTimeseriesValues(String tsid, final List<Datapoint> mData, String metricName) {
     long storeto = 0L;
     final List<TimeseriesValue> values = GraphitCollections.newList();
     for (final Datapoint val : mData) {
@@ -458,6 +472,7 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
     try {
       hiro.updateTsValues(tsid, values);
       LOG.log(Level.FINEST, "pushed timeseries values: {0} count={1}", new Object[]{tsid, values.size()});
+      updateTimeseries(tsid, storeto, metricName);
     } catch (GraphitException g) {
       LOG.log(Level.WARNING, "failed to update timeseries values for: " + tsid, g);
       return false;
