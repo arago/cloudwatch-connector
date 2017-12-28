@@ -63,6 +63,7 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
   private int metricsPollInterval;
   private int metricsBatchSize;
   private String modelMachineNodePrefix;
+  private String modelDefaultNodeId;
 
   private HiroClient hiro;
   private AmazonCloudWatchClient cloudwatchClient;
@@ -129,6 +130,7 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
     authClientSecret = c.getOr("auth.clientSecret", "");
 
     modelMachineNodePrefix = c.getOr("model.machine-node-prefix", "");
+    modelDefaultNodeId = c.getOr("model.default-node-id", "");
   }
 
   public void start() {
@@ -324,6 +326,7 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
       final Map qParams = GraphitCollections.newMap();
       qParams.put("limit", "-1");
       qParams.put("fields", Constants.Attributes.OGIT__ID);
+      waitForValidToken();
       final List result = hiro.vertexQuery(query, qParams);
       LOG.log(Level.FINEST, "discovered nodes={0}", result);
       for (Object v : result) {
@@ -346,6 +349,7 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
       qParams.put("limit", "-1");
       qParams.put("ntype", Constants.Entities.OGIT_TIMESERIES);
       qParams.put("mtype", TIMESERIES_MAIDTYPE);
+      waitForValidToken();
       final List result = hiro.vertexQuery(query, qParams);
       LOG.log(Level.FINEST, "discovered timeseries meta={0}", result);
       for (Object v : result) {
@@ -435,6 +439,7 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
     params.put(Constants.Attributes.OGIT_NAME, getFullMetricName(metricName, dimensions));
 
     try {
+      waitForValidToken();
       Map createVertexResp = hiro.createVertex(Constants.Entities.OGIT_TIMESERIES, params);
       LOG.log(Level.INFO, "created timeseries vertex: {0}", createVertexResp.get(Constants.Attributes.OGIT__ID));
       LOG.log(Level.FINEST, "created timeseries vertex: {0}", createVertexResp);
@@ -451,12 +456,9 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
     params.put("/KeyValueStore.StoredTo", storeToStr);
     params.put("/Periodity", getPeriodity(metricName) + "");
     params.put("/Transformation", getTransform(metricName));
-    try {
-      Map updateVertexResp = hiro.updateVertex(tsid, params);
-      LOG.log(Level.FINEST, "updated timeseries vertex: {0}", updateVertexResp);
-    } catch (GraphitException g) {
-      LOG.log(Level.WARNING, "failed to update timeseries vertex: " + params, g);
-    }
+    waitForValidToken();
+    Map updateVertexResp = hiro.updateVertex(tsid, params);
+    LOG.log(Level.FINEST, "updated timeseries vertex: {0}", updateVertexResp);
   }
 
   private boolean writeTimeseriesValues(String tsid, final List<Datapoint> mData, String metricName) {
@@ -470,6 +472,7 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
       values.add(v);
     }
     try {
+      waitForValidToken();
       hiro.updateTsValues(tsid, values);
       LOG.log(Level.FINEST, "pushed timeseries values: {0} count={1}", new Object[]{tsid, values.size()});
       updateTimeseries(tsid, storeto, metricName);
@@ -526,6 +529,25 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
       return metricName + " " + params.get("ProcessName");
     } else {
       return metricName;
+    }
+  }
+
+  private void waitForValidToken() {
+    while (true) {
+      try {
+        hiro.getVertex(modelDefaultNodeId);
+        break;
+      } catch (Throwable t) {
+        LOG.log(Level.WARNING, "hiro client problem", t);
+        if (t.getMessage().contains("token invalid")) {
+          try {
+            Thread.sleep(3000);
+          } catch (InterruptedException ignored) {
+          }
+        } else {
+          break;
+        }
+      }
     }
   }
 }
