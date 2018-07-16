@@ -54,7 +54,7 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
   private String monitoringEndpoint;
   private Set allowedMetricNames;
   private Set<String> namespaces;
-  private final Set knownInstanceIds = GraphitCollections.newSet();
+  private final Map<String, String> knownInstanceIds = GraphitCollections.newMap();
   private final Map<String, Map> timeseriesMeta = GraphitCollections.newConcurrentMap();
   private final Map<String, Integer> metricsPeriodities = GraphitCollections.newConcurrentMap();
   private final Map<String, String> metricsTransforms = GraphitCollections.newConcurrentMap();
@@ -62,7 +62,6 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
   private String defaultTransform;
   private int metricsPollInterval;
   private int metricsBatchSize;
-  private String modelMachineNodePrefix;
   private String modelDefaultNodeId;
 
   private HiroClient hiro;
@@ -129,7 +128,6 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
     authClientId = c.getOr("auth.clientId", "");
     authClientSecret = c.getOr("auth.clientSecret", "");
 
-    modelMachineNodePrefix = c.getOr("model.machine-node-prefix", "");
     modelDefaultNodeId = c.getOr("model.default-node-id", "");
   }
 
@@ -313,7 +311,7 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
   }
 
   private boolean isKnownInstanceId(final Metric metric) {
-    return knownInstanceIds.contains(getInstanceId(metric.getDimensions()));
+    return knownInstanceIds.containsKey(getInstanceId(metric.getDimensions()));
   }
 
   private boolean isAllowedMetricName(String metricName) {
@@ -322,7 +320,7 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
 
   private void discoverInstancesFromModel() {
     try {
-      String query = "ogit\\/_id:" + modelMachineNodePrefix.replace(":", "\\:") + "*";
+      String query = "ogit\\/Automation\\/marsNodeType:\"Machine\" AND \\/EC2Tags:*";
       final Map qParams = GraphitCollections.newMap();
       qParams.put("limit", "-1");
       qParams.put("fields", Constants.Attributes.OGIT__ID);
@@ -333,7 +331,10 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
         Object j = JSONValue.parse("" + v);
         if (j instanceof Map) {
           String ogitId = (String) ((Map) j).get(Constants.Attributes.OGIT__ID);
-          knownInstanceIds.add(ogitId.replace(modelMachineNodePrefix, ""));
+          String[] s = ogitId.split(":");
+          if (s.length > 3) {
+            knownInstanceIds.put(s[3], s[0] + ":" + s[1] + ":" + s[2] + ":");
+          }
         }
       }
     } catch (Throwable t) {
@@ -356,12 +357,15 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
         Object j = JSONValue.parse("" + v);
         if (j instanceof Map) {
           Map m = (Map) j;
-          String instanceId = ((String) m.get("/nodeID")).replace(modelMachineNodePrefix, "");
-          String dataName = (String) m.get(Constants.Attributes.OGIT_NAME);
-          if (!timeseriesMeta.containsKey(instanceId)) {
-            timeseriesMeta.put(instanceId, GraphitCollections.newMap());
+          String[] s = ((String) m.get("/nodeID")).split(":");
+          if (s.length > 3) {
+            String instanceId = s[3];
+            String dataName = (String) m.get(Constants.Attributes.OGIT_NAME);
+            if (!timeseriesMeta.containsKey(instanceId)) {
+              timeseriesMeta.put(instanceId, GraphitCollections.newMap());
+            }
+            timeseriesMeta.get(instanceId).put(dataName, m);
           }
-          timeseriesMeta.get(instanceId).put(dataName, m);
         }
       }
     } catch (Throwable t) {
@@ -426,7 +430,7 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
     for (Dimension d : dimensions) {
       params.put("/" + d.getName(), d.getValue() + "");
     }
-    params.put("/nodeID", modelMachineNodePrefix + instanceId);
+    params.put("/nodeID", knownInstanceIds.get(instanceId) + instanceId);
     params.put("/DataName", metricName);
     params.put("/MAIDType", TIMESERIES_MAIDTYPE);
     params.put("/KeyValueStore.StoredFrom", (startTimestamp / 1000) + "");
