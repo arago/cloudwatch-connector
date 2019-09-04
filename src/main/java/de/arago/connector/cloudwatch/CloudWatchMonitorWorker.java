@@ -5,6 +5,7 @@ import co.arago.hiro.client.api.TimeseriesValue;
 import co.arago.hiro.client.builder.ClientBuilder;
 import co.arago.hiro.client.builder.TokenBuilder;
 import co.arago.hiro.client.util.DefaultTimeseriesValue;
+import co.arago.hiro.client.util.HiroException;
 import com.amazonaws.auth.BasicAWSCredentials;
 import com.amazonaws.services.cloudwatch.AmazonCloudWatchClient;
 import com.amazonaws.services.cloudwatch.model.Datapoint;
@@ -15,13 +16,11 @@ import com.amazonaws.services.cloudwatch.model.GetMetricStatisticsResult;
 import com.amazonaws.services.cloudwatch.model.ListMetricsRequest;
 import com.amazonaws.services.cloudwatch.model.ListMetricsResult;
 import com.amazonaws.services.cloudwatch.model.Metric;
-import de.arago.commons.configuration.Config;
-import de.arago.graphit.api.exception.GraphitException;
-import de.arago.graphit.api.ontology.Constants;
-import de.arago.graphit.api.util.GraphitCollections;
 import java.io.Closeable;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
@@ -54,10 +53,10 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
   private String monitoringEndpoint;
   private Set allowedMetricNames;
   private Set<String> namespaces;
-  private final Map<String, String> knownInstanceIds = GraphitCollections.newMap();
-  private final Map<String, Map> timeseriesMeta = GraphitCollections.newConcurrentMap();
-  private final Map<String, Integer> metricsPeriodities = GraphitCollections.newConcurrentMap();
-  private final Map<String, String> metricsTransforms = GraphitCollections.newConcurrentMap();
+  private final Map<String, String> knownInstanceIds = new HashMap();
+  private final Map<String, Map> timeseriesMeta = new ConcurrentHashMap();
+  private final Map<String, Integer> metricsPeriodities = new ConcurrentHashMap();
+  private final Map<String, String> metricsTransforms = new ConcurrentHashMap();
   private int defaultPeriodity;
   private String defaultTransform;
   private int metricsPollInterval;
@@ -68,51 +67,51 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
   private AmazonCloudWatchClient cloudwatchClient;
   private Thread worker;
 
-  public void configure(final Config c) {
-    isEnabled = Boolean.parseBoolean(c.getOr("cloudwatch.enabled", "true"));
+  public void configure(final YamlConfig c) {
+    isEnabled = c.get("cloudwatch.enabled", true);
     if (!isEnabled) {
       return;
     }
 
-    awsKey = c.getOr("aws.AWS_ACCESS_KEY", "");
-    awsSecret = c.getOr("aws.AWS_SECRET_KEY", "");
+    awsKey = c.get("aws.AWS_ACCESS_KEY", "");
+    awsSecret = c.get("aws.AWS_SECRET_KEY", "");
 
-    graphitUrl = c.getOr("graphit.url", "");
+    graphitUrl = c.get("graphit.url", "");
 
     if (graphitUrl.isEmpty()) {
       throw new IllegalArgumentException("config does not contain graphit options");
     }
 
-    monitoringEndpoint = c.getOr("cloudwatch.endpoint", "");
-    defaultTransform = c.getOr("cloudwatch.default-transform", "Average");
-    defaultPeriodity = Integer.parseInt(c.getOr("cloudwatch.default-periodity", "180"));
-    metricsPollInterval = Integer.parseInt(c.getOr("cloudwatch.poll-interval-sec", "300"));
-    metricsBatchSize = Integer.parseInt(c.getOr("cloudwatch.batch-size", "500"));
+    monitoringEndpoint = c.get("cloudwatch.endpoint", "");
+    defaultTransform = c.get("cloudwatch.default-transform", "Average");
+    defaultPeriodity = c.get("cloudwatch.default-periodity", 180);
+    metricsPollInterval = c.get("cloudwatch.poll-interval-sec", 300);
+    metricsBatchSize = c.get("cloudwatch.batch-size", 500);
 
-    allowedMetricNames = new HashSet(c.getConfig("cloudwatch.metrics-names").dump().values());
+    allowedMetricNames = new HashSet((List) c.get("cloudwatch.metrics-names"));
     if (allowedMetricNames.isEmpty()) {
       allowedMetricNames.add("All");
     }
     LOG.log(Level.FINE, "allowed metrics names={0}", allowedMetricNames);
 
-    namespaces = new HashSet(c.getConfig("cloudwatch.namespaces").dump().values());
+    namespaces = new HashSet((List) (c.get("cloudwatch.namespaces")));
     LOG.log(Level.FINE, "allowed namespaces={0}", namespaces);
 
-    Config periodities = c.getConfig("cloudwatch.metrics-periodities");
+    List<Map> periodities = c.get("cloudwatch.metrics-periodities");
     if (periodities != null) {
-      for (Config sub : periodities.getSubs()) {
-        String name = sub.get("name");
-        String period = sub.get("periodity");
+      for (Map<String, Object> sub : periodities) {
+        String name = (String) sub.get("name");
+        Integer period = (Integer) sub.get("periodity");
         if (name != null && period != null) {
-          metricsPeriodities.put(name, Integer.parseInt(period));
+          metricsPeriodities.put(name, period);
         }
       }
     }
     LOG.log(Level.FINE, "metrics periodities={0}", metricsPeriodities);
 
-    Config transforms = c.getConfig("cloudwatch.metrics-transforms");
+    List<Map> transforms = c.get("cloudwatch.metrics-transforms");
     if (transforms != null) {
-      for (Config sub : transforms.getSubs()) {
+      for (Map<String, String> sub: transforms) {
         String name = sub.get("name");
         String type = sub.get("type");
         if (name != null && type != null) {
@@ -122,13 +121,13 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
     }
     LOG.log(Level.FINE, "metrics transforms={0}", metricsTransforms);
 
-    authUrl = c.getOr("auth.url", "");
-    authUser = c.getOr("auth.username", "");
-    authPasswd = c.getOr("auth.passwd", "");
-    authClientId = c.getOr("auth.clientId", "");
-    authClientSecret = c.getOr("auth.clientSecret", "");
+    authUrl = c.get("auth.url", "");
+    authUser = c.get("auth.username", "");
+    authPasswd = c.get("auth.passwd", "");
+    authClientId = c.get("auth.clientId", "");
+    authClientSecret = c.get("auth.clientSecret", "");
 
-    modelDefaultNodeId = c.getOr("model.default-node-id", "");
+    modelDefaultNodeId = c.get("model.default-node-id", "");
   }
 
   public void start() {
@@ -140,11 +139,7 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
     ClientBuilder builder = new ClientBuilder()
       .setRestApiUrl(graphitUrl);
 
-    if (authUser.isEmpty()) {
-      builder.setTokenProvider(new TokenBuilder().makeClientCredentials(authUrl, authClientId, authClientSecret));
-    } else {
       builder.setTokenProvider(new TokenBuilder().makePassword(authUrl, authClientId, authClientSecret, authUser, authPasswd));
-    }
 
     hiro = builder.makeHiroClient();
 
@@ -204,7 +199,7 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
             }
           }
 
-          final Map<String, Map<String, List<Datapoint>>> metricsData = GraphitCollections.newConcurrentMap();
+          final Map<String, Map<String, List<Datapoint>>> metricsData = new ConcurrentHashMap<>();
           long currentTimestamp = (new Date()).getTime();
 
           for (final Metric metric : metricsList) {
@@ -279,7 +274,7 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
   }
 
   private List<Metric> getMetricsList(String namespace, String filterName) {
-    final List<DimensionFilter> filters = GraphitCollections.newList();
+    final List<DimensionFilter> filters = new ArrayList();
     DimensionFilter dimensionFilter = new DimensionFilter();
     dimensionFilter.withName(filterName);
     filters.add(dimensionFilter);
@@ -290,7 +285,7 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
 
     ListMetricsResult listMetricsResult = cloudwatchClient.listMetrics(request);
 
-    final List<Metric> metricList = GraphitCollections.newList();
+    final List<Metric> metricList = new ArrayList();
     for (Metric metric : listMetricsResult.getMetrics()) {
       if (isKnownInstanceId(metric) && isAllowedMetricName(metric.getMetricName())) {
         metricList.add(metric);
@@ -321,7 +316,7 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
   private void discoverInstancesFromModel() {
     try {
       String query = "ogit\\/Automation\\/marsNodeType:\"Machine\" AND \\/EC2Tags:*";
-      final Map qParams = GraphitCollections.newMap();
+      final Map qParams = new HashMap();
       qParams.put("limit", "-1");
       qParams.put("fields", Constants.Attributes.OGIT__ID);
       waitForValidToken();
@@ -346,7 +341,7 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
   private void discoverTimeseriesMetadata() {
     try {
       String query = "ogit\\/_type:$ntype AND \\/MAIDType:$mtype";
-      final Map qParams = GraphitCollections.newMap();
+      final Map qParams = new HashMap();
       qParams.put("limit", "-1");
       qParams.put("ntype", Constants.Entities.OGIT_TIMESERIES);
       qParams.put("mtype", TIMESERIES_MAIDTYPE);
@@ -362,7 +357,7 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
             String instanceId = s[3];
             String dataName = (String) m.get(Constants.Attributes.OGIT_NAME);
             if (!timeseriesMeta.containsKey(instanceId)) {
-              timeseriesMeta.put(instanceId, GraphitCollections.newMap());
+              timeseriesMeta.put(instanceId, new HashMap());
             }
             timeseriesMeta.get(instanceId).put(dataName, m);
           }
@@ -400,7 +395,7 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
   private void storeMetricsData(final List<Dimension> dimensions, Map<String, Map<String, List<Datapoint>>> metricsData, long startTimestamp) {
     for (String instanceId : metricsData.keySet()) {
       if (!timeseriesMeta.containsKey(instanceId)) {
-        timeseriesMeta.put(instanceId, GraphitCollections.newMap());
+        timeseriesMeta.put(instanceId, new HashMap());
       }
       Iterator<Map.Entry<String, List<Datapoint>>> iter = metricsData.get(instanceId).entrySet().iterator();
       while (iter.hasNext()) {
@@ -426,7 +421,7 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
   }
 
   private String createTimeseries(final List<Dimension> dimensions, String instanceId, String metricName, String units, long startTimestamp) {
-    final Map params = GraphitCollections.newMap();
+    final Map params = new HashMap();
     for (Dimension d : dimensions) {
       params.put("/" + d.getName(), d.getValue() + "");
     }
@@ -444,30 +439,30 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
 
     try {
       waitForValidToken();
-      Map createVertexResp = hiro.createVertex(Constants.Entities.OGIT_TIMESERIES, params);
+      Map createVertexResp = hiro.createVertex(Constants.Entities.OGIT_TIMESERIES, params, new HashMap());
       LOG.log(Level.INFO, "created timeseries vertex: {0}", createVertexResp.get(Constants.Attributes.OGIT__ID));
       LOG.log(Level.FINEST, "created timeseries vertex: {0}", createVertexResp);
       return (String) createVertexResp.get(Constants.Attributes.OGIT__ID);
-    } catch (GraphitException g) {
+    } catch (HiroException g) {
       LOG.log(Level.WARNING, "can not create timeseries vertex: " + params, g);
     }
     return "";
   }
 
   private void updateTimeseries(String tsid, long storeto, String metricName) {
-    final Map params = GraphitCollections.newMap();
+    final Map params = new HashMap();
     String storeToStr = (storeto / 1000) + "";
     params.put("/KeyValueStore.StoredTo", storeToStr);
     params.put("/Periodity", getPeriodity(metricName) + "");
     params.put("/Transformation", getTransform(metricName));
     waitForValidToken();
-    Map updateVertexResp = hiro.updateVertex(tsid, params);
+    Map updateVertexResp = hiro.updateVertex(tsid, params, new HashMap());
     LOG.log(Level.FINEST, "updated timeseries vertex: {0}", updateVertexResp);
   }
 
   private boolean writeTimeseriesValues(String tsid, final List<Datapoint> mData, String metricName) {
     long storeto = 0L;
-    final List<TimeseriesValue> values = GraphitCollections.newList();
+    final List<TimeseriesValue> values = new ArrayList();
     for (final Datapoint val : mData) {
       if (val.getTimestamp().getTime() > storeto) {
         storeto = val.getTimestamp().getTime();
@@ -480,7 +475,7 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
       hiro.updateTsValues(tsid, values);
       LOG.log(Level.FINEST, "pushed timeseries values: {0} count={1}", new Object[]{tsid, values.size()});
       updateTimeseries(tsid, storeto, metricName);
-    } catch (GraphitException g) {
+    } catch (Throwable g) {
       LOG.log(Level.WARNING, "failed to update timeseries values for: " + tsid, g);
       return false;
     }
@@ -522,7 +517,7 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
   }
 
   private String getFullMetricName(String metricName, List<Dimension> dimensions) {
-    final Map params = GraphitCollections.newMap();
+    final Map params = new HashMap();
     for (Dimension d : dimensions) {
       params.put(d.getName(), d.getValue() + "");
     }
@@ -539,7 +534,7 @@ public class CloudWatchMonitorWorker implements Closeable, Runnable {
   private void waitForValidToken() {
     while (true) {
       try {
-        hiro.getVertex(modelDefaultNodeId);
+        hiro.getVertex(modelDefaultNodeId, new HashMap());
         break;
       } catch (Throwable t) {
         LOG.log(Level.WARNING, "hiro client problem", t);

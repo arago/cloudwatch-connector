@@ -2,7 +2,8 @@ package de.arago.connector.cloudwatch;
 
 import com.amazonaws.services.sqs.model.Message;
 import com.amazonaws.services.sqs.model.MessageAttributeValue;
-import de.arago.graphit.api.util.GraphitCollections;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import net.minidev.json.JSONValue;
@@ -10,8 +11,8 @@ import net.minidev.json.JSONValue;
 public class CloudWatchAlarmMessage {
 
   private String body;
-  private final Map attributes = GraphitCollections.newMap();
-  private final List<Map> dimmensions = GraphitCollections.newList();
+  private final Map attributes = new HashMap();
+  private final List<Map> dimmensions = new ArrayList();
 
   private String instanceId;
   private String newState;
@@ -61,7 +62,7 @@ public class CloudWatchAlarmMessage {
   }
 
   private Map toMap() {
-    final Map ret = GraphitCollections.newMap();
+    final Map ret = new HashMap();
     ret.put("instanceId", instanceId);
     ret.put("subject", subject);
     ret.put("oldState", oldState);
