@@ -3,6 +3,7 @@ package de.arago.connector.cloudwatch;
 import co.arago.hiro.client.api.HiroClient;
 import co.arago.hiro.client.builder.ClientBuilder;
 import co.arago.hiro.client.builder.TokenBuilder;
+import co.arago.hiro.client.util.HiroException;
 import com.amazonaws.ClientConfiguration;
 import com.amazonaws.auth.BasicAWSCredentials;
 import com.amazonaws.services.sqs.AmazonSQSAsync;
@@ -13,21 +14,17 @@ import com.amazonaws.services.sqs.model.GetQueueAttributesResult;
 import com.amazonaws.services.sqs.model.Message;
 import com.amazonaws.services.sqs.model.ReceiveMessageRequest;
 import com.amazonaws.services.sqs.model.ReceiveMessageResult;
-import de.arago.commons.configuration.Config;
-import de.arago.commons.xmltools.XMLHelper;
-import de.arago.graphit.api.exception.GraphitException;
-import de.arago.graphit.api.util.GraphitCollections;
 import java.io.Closeable;
 import java.io.IOException;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import javax.xml.parsers.DocumentBuilder;
-import javax.xml.parsers.DocumentBuilderFactory;
 import net.minidev.json.JSONValue;
-import org.w3c.dom.Document;
-import org.w3c.dom.Element;
 
 public class CloudWatchSQSWorker implements Closeable, Runnable {
 
@@ -57,49 +54,49 @@ public class CloudWatchSQSWorker implements Closeable, Runnable {
   private String modelMachineNodePrefix;
   private String modelDefaultNodeId;
 
-  private final Map<String, Set<String>> skipTransitions = GraphitCollections.newConcurrentMap();
+  private final Map<String, Set<String>> skipTransitions = new ConcurrentHashMap();
 
   private AmazonSQSBufferedAsyncClient bufferedSQS;
   private HiroClient hiro;
   private Thread worker;
 
-  public void configure(final Config c) {
-    isEnabled = Boolean.parseBoolean(c.getOr("sqs.enabled", "true"));
+  public void configure(final YamlConfig c) {
+    isEnabled = c.get("sqs.enabled", true);
     if (!isEnabled) {
       return;
     }
 
-    awsKey = c.getOr("aws.AWS_ACCESS_KEY", "");
-    awsSecret = c.getOr("aws.AWS_SECRET_KEY", "");
+    awsKey = c.get("aws.AWS_ACCESS_KEY", "");
+    awsSecret = c.get("aws.AWS_SECRET_KEY", "");
 
-    queueUrl = c.getOr("sqs.url", "");
+    queueUrl = c.get("sqs.url", "");
 
     if (queueUrl.isEmpty()) {
       throw new IllegalArgumentException("config does not contain sqs queueUrl");
     }
 
-    graphitUrl = c.getOr("graphit.url", "");
+    graphitUrl = c.get("graphit.url", "");
 
     if (graphitUrl.isEmpty()) {
       throw new IllegalArgumentException("config does not contain graphit options");
     }
 
-    authUrl = c.getOr("auth.url", "");
-    authUser = c.getOr("auth.username", "");
-    authPasswd = c.getOr("auth.passwd", "");
-    authClientId = c.getOr("auth.clientId", "");
-    authClientSecret = c.getOr("auth.clientSecret", "");
+    authUrl = c.get("auth.url", "");
+    authUser = c.get("auth.username", "");
+    authPasswd = c.get("auth.passwd", "");
+    authClientId = c.get("auth.clientId", "");
+    authClientSecret = c.get("auth.clientSecret", "");
 
-    sqsWaitTimeout = Integer.parseInt(c.getOr("sqs.timeout", "10"));
-    sqsMessages = Integer.parseInt(c.getOr("sqs.messages", "10"));
-    sqsMaxConnections = Integer.parseInt(c.getOr("sqs.connections", "50"));
+    sqsWaitTimeout = c.get("sqs.timeout", 10);
+    sqsMessages = c.get("sqs.messages", 10);
+    sqsMaxConnections = c.get("sqs.connections", 50);
 
-    modelMachineNodePrefix = c.getOr("model.machine-node-prefix", "");
-    modelDefaultNodeId = c.getOr("model.default-node-id", "");
+    modelMachineNodePrefix = c.get("model.machine-node-prefix", "");
+    modelDefaultNodeId = c.get("model.default-node-id", "");
 
-    Config transforms = c.getConfig("sqs.skip-status-transitions");
+    List<Map> transforms = (List) c.get("sqs.skip-status-transitions");
     if (transforms != null) {
-      for (Config sub : transforms.getSubs()) {
+      for (Map<String, String> sub : transforms) {
         String from = sub.get("from");
         String to = sub.get("to");
         if (from != null && to != null) {
@@ -107,7 +104,7 @@ public class CloudWatchSQSWorker implements Closeable, Runnable {
           if (l != null) {
             l.add(to);
           } else {
-            l = GraphitCollections.newSet();
+            l = new HashSet();
             l.add(to);
             skipTransitions.put(from, l);
           }
@@ -122,29 +119,16 @@ public class CloudWatchSQSWorker implements Closeable, Runnable {
       return;
     }
 
-    // Create HIRO client
     ClientBuilder builder = new ClientBuilder()
       .setRestApiUrl(graphitUrl);
 
-    if (authUser.isEmpty()) {
-      builder.setTokenProvider(new TokenBuilder().makeClientCredentials(authUrl, authClientId, authClientSecret));
-    } else {
-      builder.setTokenProvider(new TokenBuilder().makePassword(authUrl, authClientId, authClientSecret, authUser, authPasswd));
-    }
+    builder.setTokenProvider(new TokenBuilder().makePassword(authUrl, authClientId, authClientSecret, authUser, authPasswd));
 
     hiro = builder.makeHiroClient();
 
-    try {
-      Map info = hiro.info();
-      LOG.log(Level.FINE, "graphit: {0}", info);
-    } catch (Throwable t) {
-      throw new IllegalStateException("could not connect to graphit", t);
-    }
-
     checkDefaultNode();
-    initilaizeVariables();
+    initializeVariables();
 
-    // Create the basic Amazon SQS async client
     final ClientConfiguration clientConfiguration = new ClientConfiguration();
     clientConfiguration.withMaxConnections(sqsMaxConnections);
 
@@ -155,7 +139,6 @@ public class CloudWatchSQSWorker implements Closeable, Runnable {
       sqsAsync = new AmazonSQSAsyncClient(new BasicAWSCredentials(awsKey, awsSecret));
     }
 
-    // Create the buffered SQS client
     bufferedSQS = new AmazonSQSBufferedAsyncClient(sqsAsync);
 
     try {
@@ -173,14 +156,14 @@ public class CloudWatchSQSWorker implements Closeable, Runnable {
 
   private void checkDefaultNode() {
     try {
-      Map v = hiro.getVertex(modelDefaultNodeId);
+      Map v = hiro.getVertex(modelDefaultNodeId, new HashMap());
       LOG.log(Level.FINE, "default node: {0}", v);
-    } catch (GraphitException t) {
+    } catch (HiroException t) {
       throw new IllegalStateException("default model node not found, id=[" + modelDefaultNodeId + "]", t);
     }
   }
 
-  private void initilaizeVariables() {
+  private void initializeVariables() {
     try {
       Map variable = hiro.getVariable(VARIABLE_PROCESS_CLOUDWATCH_EVENT);
       LOG.log(Level.FINE, "varaible: {0}", variable);
@@ -263,23 +246,27 @@ public class CloudWatchSQSWorker implements Closeable, Runnable {
     }
 
     try {
-      hiro.getVertex(nodeId);
-    } catch (GraphitException t) {
+      hiro.getVertex(nodeId, new HashMap());
+    } catch (HiroException t) {
       if (t.getCode() == 404) {
         LOG.log(Level.WARNING, "node for issue does not exists: {0}, using default: {1}", new Object[]{nodeId, modelDefaultNodeId});
         nodeId = modelDefaultNodeId;
       }
     }
 
-    String issueXml = toIssueXML(msg, nodeId);
-
-    LOG.log(Level.FINE, "issue xml: {0}", issueXml);
-
-    final Map v = GraphitCollections.newMap();
-    v.put("ogit/Automation/issueFormalRepresentation", issueXml);
-
+    final Map v = new HashMap();
+    v.put(VARIABLE_PROCESS_CLOUDWATCH_EVENT, "");
+    v.put(VARIABLE_AWSSQS_ATRIBUTES, JSONValue.toJSONString(msg.getAttributes()));
+    v.put(VARIABLE_AWSSQS_BODY, msg.getBody());
+    v.put("ogit/Automation/originNode", nodeId);
+    v.put("ogit/subject", msg.getSubject());
+    
+    if (LOG.isLoggable(Level.FINE)) {
+      LOG.log(Level.FINE, "issue: {0}", v);
+    }
+    
     try {
-      Map createVertexResp = hiro.createVertex("ogit/Automation/AutomationIssue", v);
+      Map createVertexResp = hiro.createVertex("ogit/Automation/AutomationIssue", v, new HashMap());
       LOG.log(Level.FINE, "issue vertex: {0}", createVertexResp);
       LOG.log(Level.INFO, "created issue vertex: {0}", createVertexResp.get("ogit/_id"));
     } catch (Throwable t) {
@@ -288,41 +275,5 @@ public class CloudWatchSQSWorker implements Closeable, Runnable {
     }
 
     return true;
-  }
-
-  private String toIssueXML(CloudWatchAlarmMessage msg, String nodeId) throws Exception {
-    DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
-    DocumentBuilder builder = dbf.newDocumentBuilder();
-    Document doc = builder.newDocument();
-    Element xml = getElement(msg, nodeId, doc);
-
-    return XMLHelper.toXML(xml);
-  }
-
-  private Element getElement(CloudWatchAlarmMessage msg, String nodeId, Document doc) {
-    Element el = doc.createElement("Issue");
-    el.setAttribute("NodeID", nodeId);
-    el.setAttribute("xmlns", "https://graphit.co/schemas/v2/IssueSchema");
-    el.setAttribute("IssueSubject", msg.getSubject());
-
-    Element el1 = doc.createElement(VARIABLE_PROCESS_CLOUDWATCH_EVENT);
-    Element el1c = doc.createElement("Content");
-    el1c.setAttribute("Value", "");
-    el1.appendChild(el1c);
-    el.appendChild(el1);
-
-    Element el2 = doc.createElement(VARIABLE_AWSSQS_ATRIBUTES);
-    Element el2c = doc.createElement("Content");
-    el2c.setAttribute("Value", JSONValue.toJSONString(msg.getAttributes()));
-    el2.appendChild(el2c);
-    el.appendChild(el2);
-
-    Element el3 = doc.createElement(VARIABLE_AWSSQS_BODY);
-    Element el3c = doc.createElement("Content");
-    el3c.setAttribute("Value", msg.getBody());
-    el3.appendChild(el3c);
-    el.appendChild(el3);
-
-    return el;
   }
 }
